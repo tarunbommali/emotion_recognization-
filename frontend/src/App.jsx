@@ -1,9 +1,15 @@
-import React from 'react'
-import EEGProcessor from './components/EEGProcessor'
+import Footer from './components/Footer'
+import EEGProcessor from './pages/EEGProcessor'
 
 const App = () => {
   return (
+    <>
+    
     <EEGProcessor/>
+    <Footer/>
+    
+    </>
+    
   )
 }
 

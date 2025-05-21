@@ -9,6 +9,7 @@ from flask_cors import CORS
 from scipy.signal import butter, sosfiltfilt, welch
 from sklearn.ensemble import RandomForestClassifier
 
+
 # --- Configuration Constants ---
 PROCESSED_FEATURES_CSV_PATH = "eeg_features_emotions.csv"
 MODEL_PATH = "emotion_model.joblib"
@@ -221,7 +222,9 @@ def get_or_train_model():
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
-CORS(app)
+
+CORS(app, resources={r"/predict": {"origins": "http://localhost:5173"}})
+
 
 trained_model = None # Initialize global model variable
 
