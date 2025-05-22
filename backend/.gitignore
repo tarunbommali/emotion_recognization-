@@ -1,0 +1,21 @@
+# Python
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.db
+*.sqlite3
+*.log
+*.env
+*.DS_Store
+*.egg-info/
+*.egg
+*.coverage
+*.mypy_cache/
+*.pytest_cache/
+*.tox/
+*.coverage.*
+*.hypothesis/
+
+venv/

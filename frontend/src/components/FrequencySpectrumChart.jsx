@@ -1,11 +1,11 @@
 /* eslint-disable react-hooks/rules-of-hooks */
-
+// frontend/src/components/FrequencySpectrumChart.jsx
 import { Line } from 'react-chartjs-2';
 import {
   Chart as ChartJS,
   CategoryScale,
   LinearScale,
-  LogarithmicScale, 
+  LogarithmicScale,
   PointElement,
   LineElement,
   Title,
@@ -14,7 +14,7 @@ import {
   Filler,
 } from 'chart.js';
 import annotationPlugin from 'chartjs-plugin-annotation';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useMemo } from 'react';
 
 ChartJS.register(
   CategoryScale,
@@ -30,9 +30,8 @@ ChartJS.register(
 );
 
 const FrequencySpectrumChart = ({ plotData }) => {
-  const chartRef = useRef(null); 
+  const chartRef = useRef(null);
 
-  // Destructure plotData safely
   const {
     epoch_number = 'N/A',
     channel_name = 'N/A',
@@ -47,11 +46,7 @@ const FrequencySpectrumChart = ({ plotData }) => {
 
   const chartId = `spectrum-chart-${channel_name}-${epoch_number}`;
 
-  // Memoize data and options or ensure they are stable if not changing
-  // For simplicity here, we are redefining them on each render, which is
-  // usually fine if plotData itself is a new object on change.
-
-  const data = {
+  const chartData = useMemo(() => ({
     labels: freqs.map(f => f.toFixed(2)),
     datasets: [
       {
@@ -65,96 +60,125 @@ const FrequencySpectrumChart = ({ plotData }) => {
         borderWidth: 1.5,
       },
     ],
-  };
+  }), [freqs, psd, channel_name]);
 
-  const bandColors = {
-    delta: 'rgba(0, 0, 255, 0.1)',
-    theta: 'rgba(0, 128, 0, 0.1)',
-    alpha: 'rgba(255, 0, 0, 0.1)',
-    beta:  'rgba(128, 0, 128, 0.1)',
-    gamma: 'rgba(255, 165, 0, 0.1)'
-  };
 
-  const annotations = {};
-  if (bands && Object.keys(bands).length > 0) {
-    Object.keys(bands).forEach((bandName, index) => {
-      const [lowFreq, highFreq] = bands[bandName];
-      let yAxisMax = 1;
-      const positivePsdValues = psd.filter(p => p > 0);
-      if (positivePsdValues.length > 0) {
-        yAxisMax = Math.max(...positivePsdValues) * 1.1;
-      }
+  const chartOptions = useMemo(() => {
+    const bandColors = {
+      delta: 'rgba(0, 0, 255, 0.1)',
+      theta: 'rgba(0, 128, 0, 0.1)',
+      alpha: 'rgba(255, 0, 0, 0.1)',
+      beta:  'rgba(128, 0, 128, 0.1)',
+      gamma: 'rgba(255, 165, 0, 0.1)'
+    };
 
-      annotations[`band${index}`] = {
-        type: 'box',
-        xMin: lowFreq,
-        xMax: highFreq,
-        yMin: 0,
-        yMax: yAxisMax,
-        backgroundColor: bandColors[bandName] || 'rgba(128, 128, 128, 0.1)',
-        borderColor: 'transparent',
-        borderWidth: 0,
-        label: {
-          content: bandName.charAt(0).toUpperCase() + bandName.slice(1),
-          display: true,
-          position: 'start',
-          color: 'rgba(0,0,0,0.7)',
-          font: { size: 9, weight: 'bold' },
-          xAdjust: 5,
-          yAdjust: -5,
-        }
-      };
-    });
-  }
+    const currentAnnotations = {};
+    let yAxisMaxVal = 1;
+    const positivePsdValues = psd.filter(p => p > 0);
 
-  const options = {
-    responsive: true,
-    maintainAspectRatio: false,
-    animation: false, // Disable animation to see if it helps with rapid re-renders
-    scales: {
-      x: { /* ... your x-axis config ... */ 
-        title: { display: true, text: 'Frequency (Hz)', color: '#666', font: { size: 14 } },
-        ticks: { color: '#666', maxTicksLimit: 15 },
-        grid: { color: 'rgba(200, 200, 200, 0.2)' }
-      },
-      y: { /* ... your y-axis config ... */ 
-        type: 'logarithmic',
-        title: { display: true, text: 'Power Spectral Density', color: '#666', font: { size: 14 } },
-        ticks: { color: '#666' },
-        grid: { color: 'rgba(200, 200, 200, 0.2)' }
-      },
-    },
-    plugins: { /* ... your plugins config ... */ 
-      legend: { position: 'top', labels: { color: '#333' } },
-      title: { display: true, text: `Spectrum - Epoch ${epoch_number} (${channel_name})`, color: '#333', font: { size: 18, weight: 'bold' } },
-      tooltip: { mode: 'index', intersect: false, },
-      annotation: { annotations: annotations }
-    },
-    interaction: { /* ... your interaction config ... */ 
-        mode: 'nearest', axis: 'x', intersect: false
+    if (positivePsdValues.length > 0) {
+        yAxisMaxVal = Math.max(...positivePsdValues) * 1.1; // Ensure a bit of space above max
+    } else if (psd.length > 0) {
+        const maxPsd = Math.max(...psd);
+        yAxisMaxVal = maxPsd <= 0 ? 1 : maxPsd * 1.1; // If max is 0 or negative, default to 1
     }
-  };
 
-  useEffect(() => {
-  
-    return () => {
-      // Cleanup function: called when the component unmounts
-      // or before the effect runs again if dependencies like `plotData` change.
-      if (chartRef.current) {
-        // console.log(`Destroying chart instance associated with canvas ID: ${chartRef.current.canvas?.id}, Chart ID: ${chartRef.current.id}`);
-        chartRef.current.destroy();
-        chartRef.current = null; // Clear the ref after destroying
+
+    if (bands && Object.keys(bands).length > 0) {
+      Object.keys(bands).forEach((bandName, index) => {
+        const [lowFreq, highFreq] = bands[bandName];
+        currentAnnotations[`band${index}`] = {
+          type: 'box',
+          xMin: lowFreq,
+          xMax: highFreq,
+          yMin: psd.filter(p => p > 0).length > 0 ? Math.min(...psd.filter(p => p > 0)) / 10 : 0.0001, // Small value for log scale
+          yMax: yAxisMaxVal,
+          backgroundColor: bandColors[bandName.toLowerCase()] || 'rgba(128, 128, 128, 0.1)',
+          borderColor: 'transparent',
+          borderWidth: 0,
+          label: {
+            content: bandName.charAt(0).toUpperCase() + bandName.slice(1),
+            display: true,
+            position: 'start',
+            color: 'rgba(0,0,0,0.7)',
+            font: { size: 9, weight: 'bold' },
+            xAdjust: 5,
+            yAdjust: -5,
+          }
+        };
+      });
+    }
+
+    return {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      scales: {
+        x: {
+          title: { display: true, text: 'Frequency (Hz)', color: '#666', font: { size: 14 } },
+          ticks: { color: '#666', maxTicksLimit: 15 },
+          grid: { color: 'rgba(200, 200, 200, 0.2)' },
+          max: 60, // Limit x-axis to a typical EEG range like 0-60 Hz
+        },
+        y: {
+          type: 'logarithmic',
+          title: { display: true, text: 'PSD (μV²/Hz)', color: '#666', font: { size: 14 } },
+          ticks: {
+            color: '#666',
+            callback: function(value) {
+                if (value === 0) return '0'; // Handle 0 explicitly for log scale if needed
+                const k = 1000;
+                const sizes = ['', 'K', 'M', 'G', 'T']; // For very large numbers, not typical for PSD
+                const i = Math.floor(Math.log(Math.abs(value)) / Math.log(k)); // Use Math.abs for negative/zero
+                if (Number.isInteger(Math.log10(Math.abs(value))) || value === 0.1 || value === 0.01 || value === 0.001) {
+                    return value.toPrecision(1) + (sizes[i] || '');
+                }
+                return null;
+            }
+          },
+          grid: { color: 'rgba(200, 200, 200, 0.2)' },
+          min: psd.filter(p => p > 0).length > 0 ? Math.min(...psd.filter(p => p > 0)) / 10 : 0.0001,
+          // max: yAxisMaxVal, // Can set max if needed, but auto-scaling usually works
+        },
+      },
+      plugins: {
+        legend: { position: 'top', labels: { color: '#333' } },
+        title: { display: true, text: `Spectrum - Epoch ${epoch_number} (${channel_name})`, color: '#333', font: { size: 18, weight: 'bold' } },
+        tooltip: { mode: 'index', intersect: false, },
+        annotation: { annotations: currentAnnotations }
+      },
+      interaction: {
+          mode: 'nearest', axis: 'x', intersect: false
       }
     };
-  }, [plotData]); // Re-run this effect (and its cleanup) if plotData changes
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plotData, psd, freqs, bands, channel_name, epoch_number]);
+
+  useEffect(() => {
+    const chartInstance = chartRef.current;
+    return () => {
+      if (chartInstance) {
+        chartInstance.destroy();
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (chartRef.current) {
+        chartRef.current.data = chartData;
+        chartRef.current.options = chartOptions;
+        chartRef.current.update();
+    }
+  }, [chartData, chartOptions]);
+
 
   return (
-    <div className="bg-white  p-4 md:p-6 rounded-lg shadow-lg h-96">
+    <div className="bg-white p-4 md:p-6 rounded-lg shadow-lg h-96">
       <Line
-        ref={chartRef} // Assign the ref to the Line component
-        id={chartId}   // Keep the unique ID for the canvas element
-        options={options}
-        data={data}
+        ref={chartRef}
+        id={chartId}
+        options={chartOptions}
+        data={chartData}
       />
     </div>
   );

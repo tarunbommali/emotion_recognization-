@@ -1,5 +1,5 @@
 import Footer from './components/Footer'
-import EEGProcessor from './pages/EEGProcessor'
+import EEGProcessor from './components/EEGProcessor'
 
 const App = () => {
   return (
