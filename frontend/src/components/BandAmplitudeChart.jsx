@@ -22,7 +22,7 @@ ChartJS.register(
   Legend
 );
 
-const channelColors = [ // Define some colors for channels
+const channelColors = [ 
   'rgb(255, 99, 132)',  // Red
   'rgb(54, 162, 235)',  // Blue
   'rgb(75, 192, 192)',  // Green
@@ -32,20 +32,21 @@ const channelColors = [ // Define some colors for channels
 ];
 
 
-const BandAmplitudeChart = ({ bandData, bandDetails }) => {
-  if (!bandData || !bandData.time_vector || bandData.traces.length === 0) {
+const BandAmplitudeChart = ({ bandData }) => {
+  // bandData is expected to be: { band_name, freq_range_hz, time_vector, traces: [{channel_name, amplitude}, ...] }
+  if (!bandData || !bandData.time_vector || !bandData.traces || bandData.traces.length === 0) {
     return <p>No amplitude data for {bandData?.band_name || 'this band'}.</p>;
   }
 
   const chartData = {
-    labels: bandData.time_vector.map(t => t.toFixed(3)), // X-axis: time
+    labels: bandData.time_vector.map(t => t.toFixed(3)), 
     datasets: bandData.traces.map((trace, index) => ({
       label: `${trace.channel_name}`,
-      data: trace.amplitude, // Y-axis: amplitude
+      data: trace.amplitude, 
       borderColor: channelColors[index % channelColors.length],
-      backgroundColor: 'rgba(0,0,0,0)', // Transparent fill
+      backgroundColor: 'rgba(0,0,0,0)', 
       tension: 0.1,
-      pointRadius: 0, // No points for cleaner line
+      pointRadius: 0, 
       borderWidth: 1.5,
     })),
   };
@@ -59,21 +60,21 @@ const BandAmplitudeChart = ({ bandData, bandDetails }) => {
         title: { display: true, text: 'Time (s)' },
       },
       y: {
-        title: { display: true, text: 'Amplitude (µV)' }, // Assuming µV
+        title: { display: true, text: 'Amplitude (µV)' }, 
       },
     },
     plugins: {
       legend: { position: 'top' },
       title: {
         display: true,
-        text: `Band-Filtered Amplitude: ${bandData.band_name.toUpperCase()} (${bandDetails[bandData.band_name]?.join('-')} Hz)`,
+        text: `Band-Filtered Amplitude: ${bandData.band_name.toUpperCase()} (${bandData.freq_range_hz?.[0]}-${bandData.freq_range_hz?.[1]} Hz)`,
         font: { size: 16 },
       },
     },
   };
 
   return (
-    <div className="bg-white  p-4 rounded-lg shadow-md h-72">
+    <div className="bg-white p-4 rounded-lg shadow-md h-72">
       <Line options={options} data={chartData} />
     </div>
   );

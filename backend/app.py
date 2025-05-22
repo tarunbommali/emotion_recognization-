@@ -13,24 +13,23 @@ import time # For creating time vector
 # --- Configuration Constants ---
 PROCESSED_FEATURES_CSV_PATH = "eeg_features_emotions.csv"
 MODEL_PATH = "emotion_model_multichannel.joblib"
-EEG_CHANNELS_TO_PROCESS = ['EEG.AF3', 'EEG.F7'] # Using 2 channels as currently configured
+EEG_CHANNELS_TO_PROCESS = ['EEG.AF3', 'EEG.F7'] # Currently 2 channels
 
-EEG_BANDS_DEFINITIONS = {
+EEG_BANDS_DEFINITIONS = { # Used for feature extraction AND plot band definitions
     'delta': (0.5, 4),
     'theta': (4, 8),
     'alpha': (8, 13),
     'beta': (13, 30),
-    'gamma': (30, 45) # Gamma is used for features, but not requested for specific plots
+    'gamma': (30, 45) # Gamma used for features, can be plotted if added to REQUESTED_PLOT_BANDS
 }
 
-# Bands requested for specific plots by the user
+# Bands specifically requested for the new plots
 REQUESTED_PLOT_BANDS = {
-    'delta': (0.5, 4),
-    'theta': (4, 8),
-    'alpha': (8, 13),
-    'beta': (13, 30),
+    'delta': EEG_BANDS_DEFINITIONS['delta'],
+    'theta': EEG_BANDS_DEFINITIONS['theta'],
+    'alpha': EEG_BANDS_DEFINITIONS['alpha'],
+    'beta': EEG_BANDS_DEFINITIONS['beta'],
 }
-
 
 MODEL_FEATURE_COLUMNS = [
     f"{channel.replace('.', '')}{band}"
@@ -39,11 +38,11 @@ MODEL_FEATURE_COLUMNS = [
 ]
 
 EPOCH_DURATION_SECONDS = 2
-FILTER_LOWCUT_HZ = 0.5 # Overall filter for feature extraction
-FILTER_HIGHCUT_HZ = 45 # Overall filter for feature extraction
+FILTER_LOWCUT_HZ = 0.5 # Overall filter for feature extraction PSD
+FILTER_HIGHCUT_HZ = 45 # Overall filter for feature extraction PSD
 DEFAULT_METADATA_LINES_BEFORE_HEADER = 1
 
-# --- EEG Data Loading and Parsing (remains the same) ---
+# --- EEG Data Loading and Parsing (remains the same as your provided version) ---
 def load_and_parse_raw_eeg_data_from_upload(file_content_string, eeg_channel_names_list):
     print(f"Attempting to parse uploaded data for channels: {', '.join(eeg_channel_names_list)}")
     sampling_rate = None
@@ -113,7 +112,7 @@ def load_and_parse_raw_eeg_data_from_upload(file_content_string, eeg_channel_nam
             continue 
         channel_data_series = data_df[actual_channel_name_in_df]
         channel_data_numeric = pd.to_numeric(channel_data_series, errors='coerce').fillna(0.0)
-        if channel_data_numeric.isnull().sum() > 0: # Should be handled by fillna(0.0)
+        if channel_data_numeric.isnull().sum() > 0: 
              print(f"⚠️ Non-numeric entries in '{actual_channel_name_in_df}' were filled with 0.0.")
         all_channels_data[eeg_channel_name] = channel_data_numeric.to_numpy()
         print(f"✅ Parsed data for '{actual_channel_name_in_df}'. Samples: {len(all_channels_data[eeg_channel_name])}.")
@@ -124,37 +123,40 @@ def load_and_parse_raw_eeg_data_from_upload(file_content_string, eeg_channel_nam
     return all_channels_data, sampling_rate
 
 
-# --- EEG Signal Processing Functions (butter_bandpass_filter is the same) ---
+# --- EEG Signal Processing Functions ---
 def butter_bandpass_filter(data, lowcut, highcut, fs, order=5):
     nyq = 0.5 * fs
     low = lowcut / nyq
     high = highcut / nyq
     if high >= 1.0: high = 1.0 - 1e-6
     if low <= 0: low = 1e-6
-    if low >= high:
-        # Attempt to fix invalid range if highcut was drastically reduced due to low fs
-        if highcut < lowcut: lowcut = highcut / 2
+    if low >= high: # Attempt to fix common issue if highcut was drastically reduced due to low fs
+        original_lowcut = low * nyq
+        original_highcut = high * nyq
+        print(f"Warning: Filter lowcut ({original_lowcut}Hz) was >= highcut ({original_highcut}Hz). Attempting to adjust.")
+        lowcut = highcut / 2 # Example adjustment
         low = lowcut / nyq
         if low >= high: # If still invalid, raise error
-            raise ValueError(f"Filter lowcut ({lowcut}Hz) must be less than highcut ({highcut}Hz). Adjusted low={low}, high={high}")
+            raise ValueError(f"Corrected filter lowcut ({lowcut}Hz) is still >= highcut ({highcut}Hz). Cannot create filter.")
     sos = butter(order, [low, high], analog=False, btype='band', output='sos')
     return sosfiltfilt(sos, data)
 
-def calculate_band_powers_from_psd(psd, freqs, bands): # Remains the same
+def calculate_band_powers_from_psd(psd, freqs, bands_def): # Renamed arg for clarity
     band_powers = {}
-    for band_name, (low_freq, high_freq) in bands.items():
+    for band_name, (low_freq, high_freq) in bands_def.items():
         idx_band = np.logical_and(freqs >= low_freq, freqs < high_freq)
         band_powers[band_name] = np.mean(psd[idx_band]) if np.sum(idx_band) > 0 else 0.0
     return band_powers
 
-def extract_features_and_plot_data( # Renamed for clarity and expanded functionality
+# This function now also generates band-filtered time series data
+def extract_features_from_eeg_data( # Kept original name as per user's app.py
     all_channels_raw_data, # Dict: {channel_name: np.array from CSV}
     fs,
     epoch_duration,
-    overall_filter_lowcut, # For feature extraction PSD
-    overall_filter_highcut, # For feature extraction PSD
-    all_bands_definitions, # For feature extraction (e.g., including gamma)
-    requested_plot_bands_defs, # For specific band-filtered time series plots (delta, theta, alpha, beta)
+    global_lowcut, # Renamed for clarity: overall filter for feature extraction PSD
+    global_highcut, # Renamed for clarity: overall filter for feature extraction PSD
+    bands_def_for_features, # For feature extraction (e.g., including gamma)
+    plot_bands_definitions, # For specific band-filtered time series plots (delta, theta, alpha, beta)
     target_channels_order,
     band_names_order_for_features # For ordering features for the model
     ):
@@ -162,7 +164,7 @@ def extract_features_and_plot_data( # Renamed for clarity and expanded functiona
     if not all_channels_raw_data or fs is None:
         return np.array([]), [], [] # features, psd_plot_data, band_amplitude_plot_data
 
-    print(f"\n--- Extracting Features & Preparing Plot Data for channels: {', '.join(target_channels_order)} ---")
+    print(f"\n--- Extracting Features & Plot Data for: {', '.join(target_channels_order)} ---")
     
     min_length = min(len(data) for data in all_channels_raw_data.values())
     epoch_length_samples = int(epoch_duration * fs)
@@ -172,124 +174,113 @@ def extract_features_and_plot_data( # Renamed for clarity and expanded functiona
         print(f"⚠️ Data too short for any full epochs. No data processed.")
         return np.array([]), [], []
 
-    print(f"Segmenting data into {num_epochs} epochs of {epoch_duration}s each ({epoch_length_samples} samples/epoch).")
+    # Create time vector for the first epoch (used for amplitude plots)
+    time_vector_epoch = np.arange(0, epoch_length_samples / fs, 1 / fs)[:epoch_length_samples]
 
-    # Prepare overall filtered data for feature extraction PSD
-    # This is a one-time filter over the whole signal for each channel before epoching for PSD
-    overall_filtered_signal_for_psd = {}
-    current_psd_filter_highcut = overall_filter_highcut
-    if current_psd_filter_highcut >= fs / 2.0:
-        current_psd_filter_highcut = (fs / 2.0) - 1e-3
-        print(f"⚠️ Overall PSD filter highcut adjusted to {current_psd_filter_highcut:.3f}Hz for SR ({fs}Hz).")
+    # 1. Generate Band-Filtered Amplitude Data for the *first* epoch
+    band_amplitude_data_for_frontend = []
+    first_epoch_raw_data_map = {
+        ch_name: all_channels_raw_data[ch_name][:epoch_length_samples] for ch_name in target_channels_order
+    }
 
-    for ch_name in target_channels_order:
-        try:
-            overall_filtered_signal_for_psd[ch_name] = butter_bandpass_filter(
-                all_channels_raw_data[ch_name][:min_length], # Use truncated signal
-                overall_filter_lowcut,
-                current_psd_filter_highcut,
-                fs
-            )
-        except ValueError as e:
-            print(f"❌ Error during overall signal filtering for PSD for channel {ch_name}: {e}")
-            return np.array([]), [], []
-
-
-    all_epochs_features = []
-    psd_plot_data_for_frontend = [] # For 3D plot and general PSD
-    band_amplitude_data_for_frontend = [] # For new Amplitude vs Time plots
-
-    time_vector_full_signal = np.arange(0, min_length / fs, 1 / fs)[:min_length]
-
-    # 1. Generate Band-Filtered Amplitude Data for the *first* epoch for requested bands
-    # We'll do this for the first epoch as an example, you might want all epochs or a selected one.
-    # If you want for all epochs, this loop structure would need to be different or data stored per epoch.
-    # For simplicity, let's take the first epoch's band-filtered data.
-    
-    first_epoch_data_for_band_filtering = {}
-    for ch_name in target_channels_order:
-         first_epoch_data_for_band_filtering[ch_name] = all_channels_raw_data[ch_name][:epoch_length_samples]
-    
-    time_vector_epoch = time_vector_full_signal[:epoch_length_samples]
-
-    for band_name, (low, high) in requested_plot_bands_defs.items():
+    for band_name_key, (low, high) in plot_bands_definitions.items():
         band_specific_traces = []
         for ch_name in target_channels_order:
-            if ch_name in first_epoch_data_for_band_filtering:
+            if ch_name in first_epoch_raw_data_map:
                 try:
-                    # Filter the *raw data of the first epoch* for this specific band
                     band_filtered_amplitude = butter_bandpass_filter(
-                        first_epoch_data_for_band_filtering[ch_name], low, high, fs, order=4 # Use a slightly lower order for less ringing if needed
+                        first_epoch_raw_data_map[ch_name], low, high, fs, order=4
                     )
                     band_specific_traces.append({
                         "channel_name": ch_name,
                         "amplitude": band_filtered_amplitude.tolist()
                     })
                 except ValueError as e:
-                    print(f"❌ Error filtering {ch_name} for {band_name} band amplitude: {e}")
-                    band_specific_traces.append({"channel_name": ch_name, "amplitude": [0]*epoch_length_samples }) # Error case
+                    print(f"❌ Error filtering {ch_name} for {band_name_key} band amplitude: {e}")
+                    band_specific_traces.append({"channel_name": ch_name, "amplitude": [0]*epoch_length_samples })
             
         band_amplitude_data_for_frontend.append({
-            "band_name": band_name,
+            "band_name": band_name_key, # e.g. 'alpha'
+            "freq_range_hz": [low, high], # e.g. [8, 13]
             "time_vector": time_vector_epoch.tolist(),
-            "traces": band_specific_traces # List of {channel_name, amplitude_data}
+            "traces": band_specific_traces
         })
-
+        print(f"Generated amplitude data for {band_name_key} band.")
 
     # 2. Process Features and Full PSD for selected epochs (for 3D plot & model prediction)
+    # Apply overall filter to the necessary length of the signal ONCE for PSD calculation
+    overall_filtered_signal_for_psd = {}
+    current_psd_filter_highcut = global_highcut
+    if current_psd_filter_highcut >= fs / 2.0:
+        current_psd_filter_highcut = (fs / 2.0) - 1e-3
+    
+    for ch_name in target_channels_order:
+        try:
+            # Filter only the portion of the signal that will be used for epochs
+            signal_to_filter = all_channels_raw_data[ch_name][:num_epochs * epoch_length_samples]
+            overall_filtered_signal_for_psd[ch_name] = butter_bandpass_filter(
+                signal_to_filter, global_lowcut, current_psd_filter_highcut, fs
+            )
+        except ValueError as e:
+            print(f"❌ Error during overall signal filtering for PSD for channel {ch_name}: {e}")
+            # Fallback or error handling
+            overall_filtered_signal_for_psd[ch_name] = np.zeros(num_epochs * epoch_length_samples)
+
+
+    all_epochs_features = []
+    psd_plot_data_for_frontend = [] 
+
     for i in range(num_epochs):
         current_epoch_feature_vector_parts = []
-        
         for ch_name in target_channels_order:
-            # Use the overall filtered signal for PSD feature extraction
             epoch_channel_data_for_psd = overall_filtered_signal_for_psd[ch_name][i * epoch_length_samples : (i + 1) * epoch_length_samples]
             
-            nperseg_val = min(epoch_length_samples, 256 if fs >= 128 else int(fs*2))
-            nperseg_val = min(nperseg_val, len(epoch_channel_data_for_psd))
-
-            if nperseg_val <= 0 or len(epoch_channel_data_for_psd) < nperseg_val:
-                current_epoch_feature_vector_parts.extend([0.0] * len(band_names_order_for_features))
-                continue
+            nperseg_val = min(epoch_length_samples, 256 if fs >= 128 else int(fs*1.5)) # Adjusted nperseg
+            nperseg_val = max(1, min(nperseg_val, len(epoch_channel_data_for_psd))) # Ensure nperseg is valid
             
-            try:
-                freqs, psd = welch(epoch_channel_data_for_psd, fs=fs, nperseg=nperseg_val, scaling='density')
-                # Collect plot data for 3D plot (first, middle, last epoch)
-                if i == 0 or (num_epochs > 2 and i == num_epochs // 2) or i == num_epochs - 1:
-                    psd_plot_data_for_frontend.append({
-                        "epoch_number": i + 1, 
-                        "channel_name": ch_name,
-                        "freqs": freqs.tolist(), 
-                        "psd": psd.tolist(), 
-                        "bands": all_bands_definitions # Full band defs for annotations
-                    })
-            except ValueError as e:
-                print(f"Error during Welch for epoch {i+1}, Channel {ch_name}: {e}. Appending zeros for features.")
-                current_epoch_feature_vector_parts.extend([0.0] * len(band_names_order_for_features))
-                # Add empty PSD data for this problematic case if needed by frontend, or skip
-                if i == 0 or (num_epochs > 2 and i == num_epochs // 2) or i == num_epochs - 1:
-                     psd_plot_data_for_frontend.append({
-                        "epoch_number": i + 1, "channel_name": ch_name, "freqs": [], "psd": [], "bands": all_bands_definitions
-                    })
-                continue
+            if len(epoch_channel_data_for_psd) < nperseg_val : # Check again if epoch data is too short for nperseg
+                print(f"Epoch {i+1}, Chan {ch_name}: data length {len(epoch_channel_data_for_psd)} < nperseg {nperseg_val}. Zeroing features.")
+                freqs, psd = np.array([]), np.array([]) # Empty arrays for safety
+                band_powers = {b_name: 0.0 for b_name in band_names_order_for_features}
+            else:
+                try:
+                    freqs, psd = welch(epoch_channel_data_for_psd, fs=fs, nperseg=nperseg_val, scaling='density')
+                except ValueError as e: # Catch specific Welch errors (e.g., if data is all zeros)
+                    print(f"Error during Welch for epoch {i+1}, Channel {ch_name}: {e}. Zeroing features.")
+                    freqs, psd = np.array([]), np.array([]) # Use empty arrays
+                    band_powers = {b_name: 0.0 for b_name in band_names_order_for_features}
+            
+            # Collect plot data for 3D plot (first, middle, last epoch)
+            # This is ALSO the data used for "Power vs Frequency per band" plots on the frontend
+            # The frontend will filter by band for those specific charts.
+            if i == 0 or (num_epochs > 2 and i == num_epochs // 2) or i == num_epochs - 1:
+                psd_plot_data_for_frontend.append({
+                    "epoch_number": i + 1, 
+                    "channel_name": ch_name,
+                    "freqs": freqs.tolist() if freqs.size > 0 else [], 
+                    "psd": psd.tolist() if psd.size > 0 else [], 
+                    "bands": bands_def_for_features 
+                })
+            
+            if freqs.size > 0 and psd.size > 0:
+                 band_powers = calculate_band_powers_from_psd(psd, freqs, bands_def_for_features)
+            else: # If Welch failed or freqs/psd are empty
+                 band_powers = {b_name: 0.0 for b_name in band_names_order_for_features}
 
-            band_powers = calculate_band_powers_from_psd(psd, freqs, all_bands_definitions) # Use all_bands_definitions for features
             channel_features = [band_powers.get(b_name, 0.0) for b_name in band_names_order_for_features]
             current_epoch_feature_vector_parts.extend(channel_features)
 
         if len(current_epoch_feature_vector_parts) == len(MODEL_FEATURE_COLUMNS):
             all_epochs_features.append(current_epoch_feature_vector_parts)
-        else:
-            print(f"Epoch {i+1} - Feature vector length mismatch. Skipping.")
+        # No else needed; if mismatch, it's skipped, features list won't grow for this epoch.
 
-    if not all_epochs_features:
-        print("❌ No features extracted.")
-        # Still return plot data if any was generated
-        return np.array([]), psd_plot_data_for_frontend, band_amplitude_data_for_frontend 
+    if not all_epochs_features: print("❌ No features extracted for any epoch.")
+    else: print(f"✅ Features extracted for {len(all_epochs_features)} epochs.")
         
-    print(f"✅ Features extracted for {len(all_epochs_features)} epochs.")
     return np.array(all_epochs_features), psd_plot_data_for_frontend, band_amplitude_data_for_frontend
 
-# --- Model Loading and Training (remains the same) ---
+
+# --- Model Loading and Training (remains the same as your provided version) ---
 def get_or_train_model():
     global trained_model
     if trained_model is not None: return trained_model
@@ -298,7 +289,6 @@ def get_or_train_model():
         print(f"✅ Pre-trained model loaded from {MODEL_PATH}")
         if hasattr(trained_model, 'n_features_in_') and trained_model.n_features_in_ != len(MODEL_FEATURE_COLUMNS):
             print(f"⚠️ CRITICAL: Loaded model expects {trained_model.n_features_in_} features, config expects {len(MODEL_FEATURE_COLUMNS)}.")
-            print(f"Current config features: {MODEL_FEATURE_COLUMNS}")
         return trained_model
     except FileNotFoundError:
         print(f"⚠️ Model file '{MODEL_PATH}' not found. Training new model...")
@@ -310,8 +300,8 @@ def get_or_train_model():
                 raise ValueError(f"Training CSV missing: {missing}. Expected: {MODEL_FEATURE_COLUMNS} and 'emotion'.")
             X = data[MODEL_FEATURE_COLUMNS]
             y = data['emotion'].astype(str)
-            if len(X) < 10 or len(y.unique()) < 2: # Basic check
-                raise ValueError(f"Insufficient data/classes for training. Samples: {len(X)}, Classes: {len(y.unique())}")
+            if len(X) < 5 or len(y.unique()) < 2: # Reduced minimum samples for small debug datasets
+                print(f"Warning: Training with very few samples ({len(X)}) or classes ({len(y.unique())}).")
             model = RandomForestClassifier(n_estimators=100, random_state=42, class_weight='balanced')
             model.fit(X, y)
             joblib.dump(model, MODEL_PATH)
@@ -341,7 +331,7 @@ get_or_train_model()
 @app.route('/predict', methods=['POST'])
 def predict_emotions_endpoint():
     global trained_model
-    if trained_model is None: # Retry loading/training if it failed at startup
+    if trained_model is None:
         print("Model not ready, attempting to load/train again for this request...")
         get_or_train_model()
         if trained_model is None:
@@ -357,20 +347,18 @@ def predict_emotions_endpoint():
         print(f"Received file: {file.filename}")
         file_content_string = file.read().decode('utf-8', errors='ignore')
         
-        # Parse raw data from the uploaded CSV
         raw_eeg_data_per_channel, sampling_rate = load_and_parse_raw_eeg_data_from_upload(
             file_content_string, EEG_CHANNELS_TO_PROCESS
         )
         
-        # Extract features for prediction and detailed plot data
-        extracted_features, psd_plot_data, band_amplitude_plot_data = extract_features_and_plot_data(
-            raw_eeg_data_per_channel, # Pass the raw data dict
+        extracted_features, psd_plot_data_for_fe, band_amplitude_data_for_fe = extract_features_from_eeg_data(
+            raw_eeg_data_per_channel,
             fs=sampling_rate,
             epoch_duration=EPOCH_DURATION_SECONDS,
-            overall_filter_lowcut=FILTER_LOWCUT_HZ, # Use overall filters for feature PSD
-            overall_filter_highcut=FILTER_HIGHCUT_HZ,
-            all_bands_definitions=EEG_BANDS_DEFINITIONS, # For feature extraction
-            requested_plot_bands_defs=REQUESTED_PLOT_BANDS, # For amplitude plots
+            global_lowcut=FILTER_LOWCUT_HZ, 
+            global_highcut=FILTER_HIGHCUT_HZ,
+            bands_def_for_features=EEG_BANDS_DEFINITIONS, # For feature extraction
+            plot_bands_definitions=REQUESTED_PLOT_BANDS, # For specific amplitude plots
             target_channels_order=EEG_CHANNELS_TO_PROCESS,
             band_names_order_for_features=list(EEG_BANDS_DEFINITIONS.keys())
         )
@@ -382,48 +370,29 @@ def predict_emotions_endpoint():
                 return jsonify({"error": f"Model feature mismatch. Model: {trained_model.n_features_in_}, Data: {predict_df.shape[1]}." }), 500
             predictions = trained_model.predict(predict_df)
             predictions_list = [str(p) for p in predictions.tolist()]
-            print(f"✅ Predictions: {predictions_list[:5] if predictions_list else 'None'}...")
-        else:
-            print("⚠️ No features extracted, so no predictions will be made.")
-            # Still return plot data if any was generated
-            # predictions_list will be empty
-
-        print(f"PSD plot data items: {len(psd_plot_data)}. Band amplitude plot items: {len(band_amplitude_plot_data)}.")
         
         return jsonify({
             "predictions": predictions_list,
-            "psd_plot_data": psd_plot_data, # For 3D plot and band-specific PSD plots
-            "band_amplitude_data": band_amplitude_plot_data, # New data for amplitude vs time
+            "psd_plot_data": psd_plot_data_for_fe, 
+            "band_amplitude_data": band_amplitude_data_for_fe,
             "processed_channels": EEG_CHANNELS_TO_PROCESS,
             "model_feature_columns": MODEL_FEATURE_COLUMNS,
-            "emotions_legend": trained_model.classes_.tolist() if hasattr(trained_model, 'classes_') else "N/A"
+            "emotions_legend": trained_model.classes_.tolist() if hasattr(trained_model, 'classes_') else "N/A",
+            "band_definitions_for_plots": REQUESTED_PLOT_BANDS # Send this to help frontend title charts
         })
 
     except ValueError as ve:
         print(f"ValueError in prediction: {ve}")
-        traceback.print_exc()
         return jsonify({"error": f"Processing error: {str(ve)}"}), 400
     except Exception as e:
         print(f"Unexpected error in prediction: {e}")
-        traceback.print_exc()
         return jsonify({"error": f"An unexpected server error: {str(e)}"}), 500
 
 # --- Main Execution (remains the same) ---
 if __name__ == '__main__':
-    print("--------------------------------------------------------------------")
-    print("Starting Flask server for Multi-Channel EEG Emotion Prediction")
-    print(f"Processing channels: {EEG_CHANNELS_TO_PROCESS}")
-    print(f"Model expects {len(MODEL_FEATURE_COLUMNS)} features. E.g., {MODEL_FEATURE_COLUMNS[:2] if MODEL_FEATURE_COLUMNS else 'N/A'}...")
-    print(f"Model path: {MODEL_PATH}, Training CSV: {PROCESSED_FEATURES_CSV_PATH}")
-    print("--------------------------------------------------------------------")
-    
-    if trained_model is None:
-        print("🔴 CRITICAL: Model not loaded/trained at startup.")
-    else:
-        if hasattr(trained_model, 'n_features_in_') and trained_model.n_features_in_ != len(MODEL_FEATURE_COLUMNS):
-             print(f"🔴 CRITICAL STARTUP WARNING: Model expects {trained_model.n_features_in_} features, config is for {len(MODEL_FEATURE_COLUMNS)}.")
-        if hasattr(trained_model, 'classes_'):
-            print(f"✅ Model ready. Predictable emotions: {trained_model.classes_.tolist()}")
-        else:
-            print("ℹ️ Model ready, but 'classes_' attribute not found.")
+    print("--- Server Starting ---") # Simplified startup messages
+    print(f"Channels: {EEG_CHANNELS_TO_PROCESS}")
+    print(f"Model Features: {len(MODEL_FEATURE_COLUMNS)} (e.g., {MODEL_FEATURE_COLUMNS[:1]})")
+    if trained_model is None: print("🔴 CRITICAL: Model not loaded/trained at startup.")
+    else: print(f"✅ Model ready. Emotions: {trained_model.classes_.tolist() if hasattr(trained_model, 'classes_') else 'N/A'}")
     app.run(debug=True, host='0.0.0.0', port=5000)
